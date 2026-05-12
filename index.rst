@@ -1,7 +1,7 @@
 Music Daily Recs — Pipeline Ebook
-===================================
+==================================
 
-A comprehensive technical guide to the **music-daily-recs调研 pipeline**: an automated Hermes-based system that scans 43 music review sites every morning at 04:00 Beijing time, aggregates the results, scores them, and publishes a curated daily recommendation list.
+本电子书详细记录了 music-daily-recs 调研管线的架构、数据流、并发模型和输出行为。系统运行于 Hermes 任务编排框架，每天北京时间 04:00 自动抓取 43 个音乐评论站，聚合评分后推送到 Telegram。
 
 .. toctree::
    :maxdepth: 3
@@ -12,29 +12,27 @@ A comprehensive technical guide to the **music-daily-recs调研 pipeline**: an a
    chapter3_dataflow
    chapter4_output
 
-Introduction
-------------
+简介
+----
 
-This ebook documents the architecture, data flow, concurrency model, and output behaviour of the music-daily-recs skill (``music-daily-recs``) running inside the Hermes task orchestration framework.
+**管线做什么：**
 
-**What the pipeline does:**
+1. cron job 每天北京时间 04:00 触发
+2. 批处理脚本以父任务门控方式创建 43 个看板任务，每次并行 2 个
+3. 每个抓取器向 ``music-record`` git 仓库的日期子目录写入 ``{site_id}_reviews.json``
+4. 最终聚合任务读取全部 43 个 JSON 文件，去重、评分，写入三个输出文件并 git commit/push
+5. Telegram 推送 top-20 精选推荐给订阅者
 
-1. A cron job fires at 04:00 Beijing time every day
-2. A batch script creates 43 kanban tasks — two at a time, parent-gated — each running a site-specific scraper
-3. Each scraper writes a ``{site_id}_reviews.json`` file to a date-labelled subdirectory in the ``music-record`` git repository
-4. A final aggregator task reads all 43 JSON files, deduplicates them, scores each review, and writes three output files plus a git commit/push
-5. A Telegram push delivers the top-20 recommendations to subscribers
+**关键数字：**
 
-**Key numbers:**
-
-- **43** active music review sites (3 skipped: Boomkat, Syrphe, Textura — inaccessible)
-- **43** scraper tasks + **1** aggregator task per run
-- **2** scrapers running concurrently (parent-gated batching)
-- **3** output files per run: ``aggregated.json``, ``filtered.json``, ``{DATE}.md``
-- **1** top-20精简版: ``recommend/{DATE}.md``
+- **43** 个活跃音乐评论站（Boomkat、Syrphe、Textura 因不可访问已跳过）
+- **43** 个抓取任务 + **1** 个聚合任务，每次运行
+- **2** 个任务并发执行（父任务门控分批）
+- **3** 个输出文件：``aggregated.json``、``filtered.json``、``{DATE}.md``
+- **1** 个 top-20 精选推送 Telegram
 
 .. mermaid::
-   :caption: High-level pipeline overview
+   :caption: 管线高层概览
 
    %%{init: { 'theme': 'default', 'themeVariables': { 'fontSize': '14px' } } }%%
    graph LR

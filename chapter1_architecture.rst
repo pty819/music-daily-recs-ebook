@@ -1,53 +1,48 @@
-Chapter 1 — Hermes Architecture Overview
-========================================
+Hermes 架构概述
+================
 
-The music-daily-recs skill runs inside **Hermes**, a task orchestration framework built around the concept of a **kanban board** with intelligent agents, cron triggers, skill loaders, and delegation.
+music-daily-recs skill 运行在 **Hermes** 内部——一个围绕看板_board 构建的智能任务编排框架，包含定时触发器、skill 加载器和委托调度机制。
 
-1.1 Core Concepts
------------------
+核心概念
+--------
 
-Agents
-~~~~~~
+**Agent（智能体）**
 
-An **agent** is a named execution context with its own identity, auth credentials, and tool access. The pipeline uses two agent profiles:
+Agent 是一个有名字的执行上下文，拥有自己的身份、认证凭证和工具访问权限。管线使用两个 agent profile：
 
-- ``orchestrator`` — the cron agent that owns the daily pipeline run: it cleans stale tasks, syncs ``sites.json``, calls the batch script, and pushes Telegram
-- ``scraper`` — the profile used for all 43 site-specific scraper tasks and the final aggregator task; it carries the shared ``auth.json`` (single ``minimax-cn`` provider) and the kanban worker skill
+- ``orchestrator`` — 定时 agent，拥有每日管线运行的所有权：清理积压任务、同步 ``sites.json``、调用批处理脚本、推送 Telegram
+- ``scraper`` — 所有 43 个站点抓取任务和最终聚合任务共用同一个 profile；携带共享的 ``auth.json``（单一 ``minimax-cn`` provider）和 kanban worker skill
 
-Skills
-~~~~~~
+**Skill（技能）**
 
-A **skill** is a YAML/JSON document stored under ``~/.hermes/skills/`` that defines what an agent can do. The ``music-daily-recs`` skill describes the full pipeline as a sequence of steps (积压清理 → sync sites → batch create → monitor → Telegram push). Skills are loaded into the agent context at dispatch time.
+Skill 是存储在 ``~/.hermes/skills/`` 下的 YAML/JSON 文档，定义了一个 agent 能做什么。``music-daily-recs`` skill 将完整管线描述为一系列步骤（积压清理 → sync sites → 批量创建 → 监控 → Telegram 推送）。Skill 在任务分发时加载到 agent 上下文中。
 
-Kanban
-~~~~~~
+**Kanban（看板）**
 
-The **kanban board** is Hermes's task queue. Each task has:
+Kanban 板是 Hermes 的任务队列，每个任务包含：
 
-- ``id`` — unique task identifier
-- ``title`` — human-readable label
-- ``body`` — full instruction text (passed to the agent's LLM)
-- ``assignee`` — which agent profile runs it
-- ``parents`` — list of task IDs that must complete before this one is dispatched
-- ``children`` — auto-derived: tasks that list this one as parent
-- ``status`` — ``◻ todo``, ``▶ ready``, ``✓ done``, ``⊘ blocked``
-- ``skills`` — required skill tags for dispatch routing
-- ``workspace`` — working directory for file I/O
+- ``id`` — 唯一任务标识符
+- ``title`` — 人类可读标签
+- ``body`` — 完整指令文本（传入 agent 的 LLM）
+- ``assignee`` — 由哪个 agent profile 执行
+- ``parents`` — 必须先完成才能调度本任务的任务 ID 列表
+- ``children`` — 自动推导：本任务作为父任务的所有任务
+- ``status`` — ``◻ todo``、``▶ ready``、``✓ done``、``⊘ blocked``
+- ``skills`` — 分发路由所需的 skill 标签
+- ``workspace`` — 文件 I/O 的工作目录
 
-Cron
-~~~~
+**Cron（定时任务）**
 
-Hermes cron jobs (``cron_job`` in skill metadata) are scheduled triggers that fire a prompt into an agent session at a fixed wall-clock time. The ``music-daily-recs`` cron job has ID ``6fd93b4a4c4c`` and fires at **04:00 Beijing time (UTC+8)** every day.
+Hermes cron job（skill 元数据中的 ``cron_job``）是定时触发器，在固定时钟时间将 prompt 注入 agent 会话。``music-daily-recs`` cron job 的 ID 为 ``6fd93b4a4c4c``，每天北京时间 **04:00** 触发。
 
-Delegation
-~~~~~~~~~~
+**Delegation（委托）**
 
-The orchestrator **delegates** heavy work to sub-agents by creating kanban tasks. It never runs the scrapers itself — it creates the tasks and the kanban dispatcher spawns ``scraper`` profile workers to execute them.
+编排器通过创建 kanban 任务将重活委托给子 agent。它本身从不运行抓取器——只是创建任务，由 kanban 调度器生成 ``scraper`` profile 的 worker 来执行。
 
-1.2 Component Architecture
----------------------------
+组件架构
+--------
 
-The diagram below shows all Hermes components and their relationships:
+下图展示所有 Hermes 组件及其关系：
 
 .. mermaid::
    :caption: Hermes component architecture for music-daily-recs
@@ -91,20 +86,20 @@ The diagram below shows all Hermes components and their relationships:
        AGG_T -->|writes| AGG_JSON
        AGG_T -->|writes| REC_JSON
 
-1.3 The Serial-Parallel Hybrid Pattern
----------------------------------------
+串行-并行混合模式
+-----------------
 
-The pipeline uses a **parent-gated serial-parallel hybrid** to reconcile two competing constraints:
+管线采用**父任务门控的串行-并行混合模式**，以调和两个相互冲突的约束：
 
-**Constraint A — Throughput:** 43 scrapers must run as fast as possible.
-**Constraint B — Resource:** Each scraper launches a headless browser consuming ~200–400 MB RSS. Running all 43 simultaneously causes OOM.
+**约束 A — 吞吐量：** 43 个抓取器必须尽快运行。
+**约束 B — 资源：** 每个抓取器启动一个消耗约 200–400 MB RSS 的无头浏览器。同时运行全部 43 个会导致 OOM。
 
-**Solution:** parent-gated batching with ``batch_size = 2``.
+**解决方案：** ``batch_size = 2`` 的父任务门控分批。
 
-The batch script creates tasks in groups of two. Each group does not start until the *previous* group's two tasks are marked ``✓ done``. This means only two scraper processes exist at any moment, while the overall chain progresses serially through 22 batches.
+批处理脚本每次创建两个任务为一组。只有*前一组的两个任务*都标记为 ``✓ done`` 后，下一组才开始调度。这意味着任意时刻只存在两个抓取器进程，而整体链路串行推进 22 个批次。
 
 .. mermaid::
-   :caption: Parent-gated 2-concurrent batching (simplified, 6 sites shown)
+   :caption: 父任务门控 2 并发分批（简化示例，6 个站点）
 
    %%{init: { 'theme': 'default' } }%%
    graph LR
@@ -122,37 +117,37 @@ The batch script creates tasks in groups of two. Each group does not start until
        style B3 fill:#c8e6c9
        style B4 fill:#fff9c4
 
-1.4 Task Profile Assignment
-----------------------------
+任务 Profile 分配
+-----------------
 
-All 43 scraper tasks and the aggregator task share the same ``scraper`` profile (same auth, same workspace, same kanban-worker skill). This is intentional — it allows the aggregator to read the scrapers' output files directly from the shared workspace without any inter-process transfer mechanism.
+43 个抓取任务和聚合任务共用同一个 ``scraper`` profile（相同认证、相同 workspace、相同 kanban-worker skill）。这是有意为之——聚合器可以直接从共享 workspace 读取抓取器的输出文件，无需任何跨进程传输机制。
 
-The only distinction is task title and body content, which route each task to the correct site-specific or aggregation logic inside the single scraper worker.
+唯一区分在于任务标题和 body 内容，它们将每个任务路由到单个 scraper worker 内部正确的站点专属或聚合逻辑。
 
-**Task group assignments:**
+**任务组分配：**
 
-- **43 scrapers** — assignee: ``scraper``, skills: ``kanban-worker``, workspace: ``dir:~/music-record/2026/{MM}/{DATE}/``
-- **1 aggregator** — assignee: ``scraper``, skills: ``kanban-worker``, workspace: same dir
+- **43 个抓取器** — assignee: ``scraper``，skills: ``kanban-worker``，workspace: ``dir:~/music-record/2026/{MM}/{DATE}/``
+- **1 个聚合器** — assignee: ``scraper``，skills: ``kanban-worker``，workspace: 同上
 
-1.5 Directory Layout
---------------------
+目录结构
+--------
 
-The git repository ``pty819/music-record`` is the central store:
+git 仓库 ``pty819/music-record`` 是整个系统的中心存储：
 
 ::
 
-   ~/music-record/                ← git working tree
+   ~/music-record/                ← git 工作树
    ├── 2026/
    │   ├── 05/
-   │   │   ├── 2026-05-12/       ← date-named subdirectory (workspace)
+   │   │   ├── 2026-05-12/       ← 以日期命名的子目录（workspace）
    │   │   │   ├── the_wire_reviews.json
-   │   │   │   ├── point_of_ departure_reviews.json
+   │   │   │   ├── point_of_departure_reviews.json
    │   │   │   ├── ...
-   │   │   │   ├── 43 more {site_id}_reviews.json
+   │   │   │   ├── 另外 43 个 {site_id}_reviews.json
    │   │   │   ├── aggregated.json
    │   │   │   ├── filtered.json
    │   │   │   └── 2026-05-12.md
    │   │   └── ...
    │   └── ...
    └── recommend/
-       └── 2026-05-12.md         ← top-20精简版
+       └── 2026-05-12.md         ← top-20 精选版
