@@ -34,14 +34,27 @@ jobs:
         run: |
           uv run --python .venv sphinx-build -b latex . _build/latex || true
 
-      - name: Upload HTML artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ebook-html
-          path: _build/html
-          retention-days: 30
-
       - name: Verify output
         run: |
           echo "=== Built files ===" && find _build/html -name "*.html" | head -20
           echo "=== Mermaid usage check ===" && grep -r "mermaid" _build/html/*.html | wc -l
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _build/html
+
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
